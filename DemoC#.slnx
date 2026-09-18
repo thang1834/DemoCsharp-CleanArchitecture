@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="DemoC#.Application.Tests/DemoC#.Application.Tests.csproj" />
+  <Project Path="DemoC#.Application/DemoC#.Application.csproj" />
+  <Project Path="DemoC#.Domain/DemoC#.Domain.csproj" />
+  <Project Path="DemoC#.Infrastructure/DemoC#.Infrastructure.csproj" />
+  <Project Path="DemoC#/DemoC#.csproj" />
+</Solution>
