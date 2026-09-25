@@ -30,13 +30,20 @@
 
 #### Mô hình 1: RBAC (Role-Based Access Control) - Phân quyền theo Vai trò
 RBAC là mô hình kinh điển nhất. Chúng ta gom người dùng vào các nhóm (Role) như `Admin`, `User`, `Manager`. Quyền truy cập được cấp cho tập thể Role thay vì từng cá nhân.
+**1. Sơ đồ Thực thể (ERD):**
 ```mermaid
 erDiagram
-    USERS { string Username }
-    ROLES { string RoleName }
-    USER_ROLES { int UserId int RoleId }
     USERS ||--o{ USER_ROLES : "sở hữu"
     ROLES ||--o{ USER_ROLES : "được gán cho"
+```
+**2. Luồng xử lý (Pipeline):**
+```mermaid
+flowchart LR
+    Req[Request API] --> F[Filter: Cần Role 'Admin']
+    F -- 1. Đọc JWT Token --> T[Lấy danh sách Roles]
+    T -- 2. So sánh --> D{Có chứa 'Admin'?}
+    D -- YES --> API[Chạy Logic C#]
+    D -- NO --> Err[Lỗi 403 Forbidden]
 ```
 - **Bản chất:** Gắn cứng quyền truy cập vào một "Chức danh". (VD: `[Authorize(Roles="Writer")]`).
 - **Ưu điểm (Dễ triển khai):** Cực kỳ dễ code, dễ hiểu. Phù hợp cho các dự án nhỏ, nội bộ, ít biến động.
@@ -46,24 +53,40 @@ erDiagram
 
 **💻 Demo Code:**
 ```csharp
-// Đơn giản chỉ cần gắn Attribute lên Controller hoặc Action
+// [BƯỚC 1]: Developer chỉ cần sử dụng Attribute [Authorize] có sẵn của .NET
+// Điền tên các chức danh (Role) được phép vào chuỗi String
 [Authorize(Roles = "Admin, Manager")]
 [HttpPost("create-article")]
 public IActionResult CreateArticle() 
 { 
+    // [BƯỚC 2]: Nếu User có Role là Admin hoặc Manager, luồng chạy sẽ lọt vào đây.
+    // Nếu User là Staff -> .NET tự động chặn ngay ngoài cửa, văng lỗi 403 Forbidden.
     return Ok("Thêm bài viết thành công!");
 }
 ```
 
+> 💡 **Key Takeaway (Chuyển ý):** RBAC sinh ra để giải bài toán cơ bản nhưng gục ngã trước sự phức tạp của doanh nghiệp lớn. Để không phải đẻ ra hàng trăm Role rác, chúng ta cần một khái niệm trừu tượng hơn: Không hỏi "Bạn là ai?", mà hỏi "Bạn được phép làm gì?". Đó là lúc PBAC xuất hiện.
+
 #### Mô hình 2: PBAC (Permission-Based Access Control) - Phân quyền theo Hành động
 Khắc phục RBAC, ta bẻ nhỏ hệ thống thành các Quyền (Permission) như `articles:create`, `articles:delete`. Bạn có Permission nào thì làm được việc đó, bất kể bạn là sếp hay nhân viên.
+**1. Sơ đồ Thực thể (ERD):**
 ```mermaid
 erDiagram
-    USERS ||--o{ USER_ROLES : "sở hữu"
-    ROLES ||--o{ ROLE_PERMISSIONS : "chứa các"
-    PERMISSIONS ||--o{ ROLE_PERMISSIONS : "nằm trong"
-    USERS ||--o{ USER_PERMISSIONS : "quyền ngoại lệ"
-    PERMISSIONS ||--o{ USER_PERMISSIONS : "cấp riêng cho"
+    USER_PERMISSIONS }o--|| USERS : "quyền ngoại lệ"
+    USER_PERMISSIONS }o--|| PERMISSIONS : "được cấp trực tiếp"
+    USERS ||--o{ USER_ROLES : "cấp phát"
+    ROLES ||--o{ USER_ROLES : "được gán cho"
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : "định nghĩa"
+    ROLES ||--o{ ROLE_PERMISSIONS : "bao gồm"
+```
+**2. Luồng xử lý (Pipeline):**
+```mermaid
+flowchart LR
+    Req[Request API] --> F[Policy: Cần 'article:create']
+    F -- 1. Đọc JWT Token --> T[Lấy danh sách Permissions]
+    T -- 2. So sánh --> D{Có chứa 'article:create'?}
+    D -- YES --> API[Chạy Logic C#]
+    D -- NO --> Err[Lỗi 403 Forbidden]
 ```
 - **Bản chất:** Không kiểm tra Chức danh, mà kiểm tra "Giấy phép" (`[HasPermission("Approve_News")]`). Role lúc này chỉ là cái vỏ gom nhóm. Bảng `USER_PERMISSIONS` sinh ra để giải quyết quyền ngoại lệ.
 - **Ưu điểm (Linh hoạt tuyệt đối):**
@@ -73,25 +96,45 @@ erDiagram
 
 **💻 Demo Code:**
 ```csharp
-// 1. Khai báo Policy ở Program.cs
+// [BƯỚC 1]: Định nghĩa một "Chính sách" (Policy) tại file Program.cs (Lúc khởi động App)
 builder.Services.AddAuthorization(options =>
 {
+    // Tạo policy tên là "CanCreateArticle"
     options.AddPolicy("CanCreateArticle", policy => 
+        // Thay vì check chức danh (Role), ta yêu cầu User phải có "Tờ giấy phép" (Claim) mang tên "articles:create"
         policy.RequireClaim("permission", "articles:create"));
 });
 
-// 2. Sử dụng ở Controller (Không cần quan tâm tới Role nữa)
+// [BƯỚC 2]: Tại Controller, gắn tên Policy thay vì gắn tên Role
 [Authorize(Policy = "CanCreateArticle")]
 [HttpPost("create-article")]
-public IActionResult CreateArticle() { ... }
+public IActionResult CreateArticle() 
+{ 
+    // Developer không còn phải quan tâm User là Giám đốc hay Thực tập sinh nữa.
+    // Cứ có Giấy phép "articles:create" là được vào!
+    return Ok("Thành công"); 
+}
 ```
 
+> 💡 **Key Takeaway (Chuyển ý):** PBAC giải phóng hệ thống khỏi sự cứng nhắc của chức danh, nhưng lại quá "ngây thơ" về mặt dữ liệu. Nó cho phép bạn "Sửa Bài", nhưng không phân biệt được đó là bài của BẠN hay của NGƯỜI KHÁC. Để vá lỗ hổng Data Blindness (Mù lòa dữ liệu) này, chúng ta buộc phải kéo logic dữ liệu vào cuộc chơi, sinh ra mô hình ABAC.
+
 #### Mô hình 3: ABAC (Attribute-Based Access Control) - Phân quyền theo Thuộc tính
+**1. Sơ đồ Thực thể (ERD):**
 ```mermaid
 erDiagram
-    USERS ||--o{ USER_ATTRIBUTES : "VD: Chức vụ, Tuổi"
-    RESOURCES ||--o{ RESOURCE_ATTRIBUTES : "VD: Người tạo, Trạng thái"
-    POLICIES ||--o{ POLICY_CONDITIONS : "VD: Nếu User.Id == Resource.OwnerId"
+    USERS ||--o{ USER_ATTRIBUTES : "VD: Phòng ban, Tuổi"
+    RESOURCES ||--o{ RESOURCE_ATTRIBUTES : "VD: OwnerId, Trạng thái"
+    POLICIES ||--o{ POLICY_CONDITIONS : "Logic: User.Id == OwnerId"
+```
+**2. Luồng xử lý (Pipeline):**
+```mermaid
+flowchart LR
+    Req[Request API] --> H[ABAC Handler]
+    H -- 1. Trích xuất --> U[Thuộc tính User]
+    H -- 2. Query DB --> R[Thuộc tính Tài nguyên]
+    U & R --> E{Engine tính toán Rule}
+    E -- YES --> API[Chạy Logic C#]
+    E -- NO --> Err[Lỗi 403 Forbidden]
 ```
 - **Bản chất:** Đánh giá quyền dựa trên 4 Thuộc tính: User, Dữ liệu, Hành động, Môi trường.
 - **Ưu điểm (Kiểm soát siêu mịn - Fine-grained):**
@@ -101,24 +144,51 @@ erDiagram
 
 **💻 Demo Code (ABAC Handler):**
 ```csharp
-// Lớp ABAC Handler - Xử lý nghiệp vụ động (Ví dụ: Kiểm tra phòng ban của User)
+// [BƯỚC 1]: Viết một Class Handler tách biệt hoàn toàn khỏi Controller để chứa logic kiểm tra động
 protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ArticleAbacRequirement req)
 {
+    // [BƯỚC 2]: Đọc thông tin (Thuộc tính) của người dùng từ thẻ JWT Token
     var userDept = context.User.FindFirst("department")?.Value;
+    
+    // [BƯỚC 3]: Chạy logic kiểm tra thực tế (Ví dụ: So sánh phòng ban)
+    // Hoặc query Database lấy Bài viết ra để check xem: user.Id == article.AuthorId hay không?
     if (userDept == req.RequiredDepartment) 
     {
-        context.Succeed(req); // Vượt ải!
+        // [BƯỚC 4]: Đóng dấu "Hợp lệ" cho phép Request vượt ải!
+        context.Succeed(req); 
     }
-    return Task.CompletedTask;
+    
+    // Nếu code chạy đến đây mà không có lệnh Succeed() -> Tự động bị hệ thống chặn lại (Fail)
+    return Task.CompletedTask; 
 }
 ```
 
+> 💡 **Key Takeaway (Chuyển ý):** ABAC cực kỳ mạnh mẽ và bảo mật tuyệt đối, nhưng cái giá phải trả là hiệu năng thê thảm và việc setup cực kỳ phức tạp. Hơn nữa, nếu bài toán thiên về chia sẻ tài nguyên lồng nhau chằng chịt (như thư mục Google Drive) thì ABAC cũng đuối sức. Khi đó, gã khổng lồ Google đã thiết kế ra một khái niệm mới: ReBAC.
+
 #### Mô hình 4: ReBAC (Relationship-Based Access Control)
+**1. Sơ đồ Thực thể (Tuple ERD kiểu Google Zanzibar):**
+```mermaid
+erDiagram
+    RELATION_TUPLES {
+        string Subject "VD: user:123"
+        string Relation "VD: viewer"
+        string Object "VD: folder:456"
+    }
+```
+**2. Cây đồ thị & Pipeline xử lý:**
 ```mermaid
 flowchart LR
-    U[User A] -- is_member_of --> G[Team Kỹ thuật]
-    G -- can_edit --> F[Thư mục Báo cáo]
-    F -- contains --> D[File Báo cáo Q3]
+    Req[Request] --> M[Middleware C#]
+    M -->|1. Gửi lệnh RPC| Z[(Zanzibar Engine)]
+    subgraph Graph [Đồ thị quan hệ]
+        U[User A] -->|is_member_of| G[Team Kỹ thuật]
+        G -->|can_edit| F[Thư mục Báo cáo]
+        F -->|contains| D[File Báo cáo Q3]
+    end
+    Z -.->|2. Duyệt đồ thị| U
+    Z -->|3. Trả kết quả| D2{Allowed?}
+    D2 -->|YES| API[Chạy Logic C#]
+    D2 -->|NO| Err[Lỗi 403]
 ```
 - **Bản chất:** Phân quyền dựa trên Đồ thị mối quan hệ (Cơ chế Google Zanzibar).
 - **Ưu điểm (Đỉnh cao bài toán Chia sẻ):**
@@ -128,21 +198,26 @@ flowchart LR
 
 **💻 Demo Code (Mô phỏng gọi tới Engine ReBAC bên ngoài như SpiceDB/Auth0 FGA):**
 ```csharp
-// ReBAC không tự xử lý bằng code if-else mà hỏi Engine Đồ thị qua API
+// [BƯỚC 1]: Code C# của ta lúc này trở nên rất "ngu", nó không tự tính toán if-else nữa
 public async Task<bool> CheckRebacPermission(string userId, string action, string resourceId)
 {
-    // Tạo câu hỏi: "User A có quyền duyệt trên Bài viết B không?"
+    // [BƯỚC 2]: Gói câu hỏi gửi cho hệ thống Đồ thị bên ngoài (Ví dụ: SpiceDB / Auth0 FGA)
+    // Nội dung hỏi: "Tài khoản userId này, có quyền hành động action, trên đối tượng resourceId này không?"
     var request = new CheckRequest {
         User = $"user:{userId}",
         Relation = action,
         Object = $"article:{resourceId}"
     };
     
-    // Gửi request tới máy chủ Zanzibar và đợi trả về True/False
+    // [BƯỚC 3]: Gọi API (RPC/HTTP) bay sang máy chủ Zanzibar
     var response = await _rebacClient.CheckAsync(request);
+    
+    // [BƯỚC 4]: Trả về kết quả True/False do Zanzibar tính toán sẵn dựa trên Cây đồ thị khổng lồ của nó
     return response.Allowed; 
 }
 ```
+
+> 💡 **Key Takeaway (Chuyển ý):** ReBAC là đỉnh cao công nghệ nhưng lại là "Dao mổ trâu giết gà" đối với một hệ thống tin tức phẳng. Vậy làm sao để có được tính động, dễ tùy biến trên giao diện cho Admin mà không cần setup ReBAC đắt đỏ? Rất nhiều hệ thống đã rẽ hướng sang sử dụng một thủ thuật cài đặt: Dynamic Filter.
 
 #### 🔍 Phương pháp cài đặt bổ trợ: Phân quyền Động theo Controller/Action
 *Đây là một **Kỹ thuật Hiện thực hóa (Implementation Approach)** vô cùng thực tiễn, có thể bóc tách thành 3 tầng cấu trúc:*
@@ -150,7 +225,17 @@ public async Task<bool> CheckRebacPermission(string userId, string action, strin
 1. **Về Mô hình Cốt lõi (Extended RBAC - Phân quyền hạt mịn Fine-Grained):** Thay vì chỉ check Role thô như `Admin`, mô hình này bẻ nhỏ quyền hạn đến từng hành động. Controller đại diện cho *Tài nguyên*, Action đại diện cho *Thao tác* (Thêm/Sửa/Xóa).
 2. **Về Cơ chế Quản lý (Dynamic Authorization - Dữ liệu dẫn dắt):** Thay vì hard-code tĩnh `[Authorize(Roles="Admin")]` (cứ sửa quyền là phải build lại code), kỹ thuật này đẩy toàn bộ luật xuống Database. Quản trị viên có thể tùy ý cấp/tước quyền trên giao diện mà không cần chạm vào mã nguồn.
 3. **Về Kỹ thuật ASP.NET Core:** Sự kết hợp hoàn hảo giữa **Policy-Based Authorization** (tách logic bảo mật ra khỏi Controller) và **Routing Metadata** (tự động bóc tách Tên Controller & Action từ Request) để chạy qua một "Cửa khẩu" duy nhất (Global Filter).
-- **Sơ đồ Pipeline (Luồng xử lý):**
+**1. Sơ đồ Thực thể (ERD):**
+```mermaid
+erDiagram
+    USERS ||--o{ USER_MENUS : "được phân quyền"
+    MENUS ||--o{ USER_MENUS : "gồm các"
+    MENUS {
+        string Controller "VD: Article"
+        string Action "VD: Create"
+    }
+```
+**2. Sơ đồ Pipeline (Luồng xử lý):**
 ```mermaid
 flowchart LR
     Req[Request] --> F[Global Action Filter]
@@ -168,53 +253,50 @@ flowchart LR
 
 **💻 Demo Code (Global Filter):**
 ```csharp
+// [BƯỚC 1]: Tạo một "Cái phễu" (Global Filter) để chặn và quét toàn bộ Request của cả hệ thống
 public class PermissionAuthorizationFilter : IAsyncAuthorizationFilter
 {
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
-        // 1. Lấy thông tin Controller & Action từ Route hiện tại
+        // [BƯỚC 2]: Trích xuất tự động Tên Controller và Action mà User đang cố truy cập (VD: "Article", "Create")
         var controller = context.ActionDescriptor.RouteValues["controller"];
         var action = context.ActionDescriptor.RouteValues["action"];
         var userId = context.HttpContext.User.FindFirst("sub")?.Value;
         
-        // 2. Query xuống Database kiểm tra (Nút thắt cổ chai)
+        // [BƯỚC 3]: Chọc thẳng xuống Database để tra bảng quyền hạn (Đây chính là nút thắt cổ chai làm chậm hệ thống)
         bool hasPermission = await _dbContext.CheckUserPermission(userId, controller, action);
         
-        // 3. Phán quyết
+        // [BƯỚC 4]: Nếu Database báo Không có quyền -> Chặn lại ngay lập tức (Trả về 403)
         if (!hasPermission) context.Result = new ForbidResult();
     }
 }
 ```
 
-#### 📊 Bảng so sánh tổng hợp đa chiều
-| Tiêu chí | RBAC (Role) | PBAC (Permission) | ABAC (Attribute) | ReBAC (Relationship) | Dynamic Filter (Controller) | Giải pháp Zero Trust |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1. Bản chất hoạt động** | Gắn cứng Role vào mã nguồn | Cấp quyền dựa trên Hành động | Đánh giá điều kiện Thuộc tính | Duyệt Đồ thị quan hệ | Bắt theo tên Route (Controller/Action) | Phối hợp màng lọc Đa lớp |
-| **2. Độ chi tiết (Granularity)** | **Thô** (Chỉ gom nhóm là "Admin", không rõ được gọi API nào) | **Mịn** (Biết rõ được phép gọi API Create, nhưng cấm API Delete) | **Siêu mịn** (Cùng API Edit, nhưng chỉ được sửa "Bài của mình") | **Mịn** (Quyền lan truyền tự động theo thư mục cha-con) | **Mịn** (Bắt chính xác từng đường dẫn URL, từng nút bấm) | **Toàn diện** (Kiểm soát từ thiết bị, hành động, đến dữ liệu) |
-| **3. Khi thay đổi quyền hạn** | **Phải sửa Code & Rebuild** (Do Role bị hardcode) | **Đổi trên DB** (Có tác dụng ngay không cần Rebuild) | **Cấu hình Policy** (Linh hoạt theo logic code) | **Cấu hình trên SaaS** (Giao diện đồ thị ngoài) | **Tích chọn trên UI** (Lưu Database không cần Rebuild) | **Động 100%** (Đổi trên DB & Policy linh hoạt) |
-| **4. Độ linh hoạt (Xử lý ngoại lệ)** | **Rất Kém** (Bị bó cứng theo chức danh, khó cấp quyền dị biệt) | **Khá** (Có thể cấp quyền lẻ cho từng User ngoài nhóm) | **Tuyệt đối** (Dễ dàng code các luật kinh doanh kỳ lạ nhất) | **Cao** (Xử lý gọn bài toán chia sẻ ngang hàng/thừa kế) | **Khá** (Tùy biến cấp/tước quyền trên UI nhanh chóng) | **Tối đa** (Đáp ứng mọi rule từ tĩnh đến động) |
-| **5. Hiệu năng (Performance)** | 🚀 **Rất nhanh** (Chỉ check chuỗi Role trong Token) | 🚀 **Nhanh** (Quyền được cache vào JWT Token) | ⚠️ **Chậm** (Phải query DB lấy dữ liệu thực thể để so sánh) | ⚡ **Rất nhanh** (Engine bên thứ 3 có thuật toán cache riêng) | 🐌 **Rất chậm** (Mọi Request đều phải query xuống Database) | 🚀 **Nhanh** (Tối ưu nhờ Redis Cache & JWT Payload nhẹ) |
-| **6. Bền vững khi Refactor Code** | ✅ **Tốt** (Sửa tên hàm thoải mái vì gắn bằng Attribute) | ✅ **Rất Tốt** (Dùng chuỗi String cố định như `articles:read`) | ✅ **Tốt** (Logic gói gọn trong Handler độc lập) | ✅ **Tốt** (Tách biệt khỏi mã nguồn) | ❌ **Rất kém** (Đổi tên Controller/Action là gãy quyền toàn cục) | ✅ **Tốt** (Controller không chứa bất kỳ logic quyền nào) |
-| **7. Bối cảnh động & Dữ liệu** | ❌ **Không** (Mù lòa về chủ sở hữu dữ liệu) | ❌ **Không** (Chỉ biết hành động, dễ bị lỗi IDOR) | ✅ **Có** (Nhận diện chủ sở hữu, phòng ban, thời gian) | ✅ **Có** (Tính toán dựa trên quan hệ cha-con) | ❌ **Không** (Chỉ chặn cửa ngoài Controller, dễ dính IDOR) | ✅ **Có** (Bắt trọn nhờ lớp ABAC Handler ở cuối) |
-| **8. Kiểm soát Thiết bị (Scope)** | ❌ **Không** | ❌ **Không** | ⚠️ **Khó áp dụng** | ❌ **Không** | ❌ **Không** | ✅ **Có** (Chặn ngay ở lớp màng lọc số 1 từ Token) |
-| **9. Độ phức tạp Code / Setup** | 🟢 **Rất Dễ** (Chỉ thêm 1 dòng Attribute vào Code) | 🟡 **Trung bình** (Cần thiết lập Policy & Database) | 🔴 **Rất Khó** (Phải viết Handler và thiết kế DB tinh vi) | 🟣 **Đắt đỏ** (Phụ thuộc vào dịch vụ SaaS trả phí) | 🟡 **Khá Dễ** (Chỉ cần viết 1 Filter dùng chung) | 🔴 **Khó** (Cần Boilerplate lớn, nhưng vô cùng xứng đáng) |
-| **10. Khả năng Kiểm toán (Audit)** | 🟢 **Dễ** (Chỉ cần query bảng Role) | 🟢 **Dễ** (Query bảng Permission là thấy) | 🔴 **Rất Khó** (Quyền bị giấu kín trong logic if-else) | 🟢 **Dễ** (Truy vấn đồ thị Zanzibar) | 🟢 **Dễ** (Query bảng Menu Filter) | 🟣 **Toàn diện** (Lưu vết mọi hành động qua Audit Log) |
-| **11. Khả năng Mở rộng (Scale hệ thống)** | 🔴 **Kém** (Bùng nổ số lượng bảng gán quyền khi quy mô Cty tăng) | 🟡 **Khá** (Dễ phình to bảng cấu hình User-Permission) | 🟢 **Tốt** (1 rule code bao quát được hàng triệu User) | 🟣 **Hoàn hảo** (Thuật toán Google chuyên trị Big Data) | 🔴 **Thảm họa** (Nghẽn cổ chai DB I/O khi đông User) | 🟢 **Rất Tốt** (Pipeline xử lý nhẹ nhàng, ít phụ thuộc DB) |
-| **12. Tương thích Microservices** | 🟡 **Trung bình** (Truyền Role qua JWT) | 🟢 **Tốt** (Truyền Permission nhẹ nhàng qua JWT) | 🟡 **Khó** (Mỗi service phải tự query DB lấy thuộc tính) | 🟢 **Tốt** (Gọi quyền tập trung qua Engine SaaS) | 🔴 **Bất lực** (Mỗi service lại phải tự chọc chung 1 DB) | 🟣 **Tuyệt vời** (Phi tập trung hoàn hảo nhờ Token & Handler) |
+> 💡 **Key Takeaway (Chuyển ý):** Dynamic Filter rất tiện dụng cho Admin thao tác trên UI, nhưng lại là quả bom nổ chậm với lập trình viên (vỡ code khi đổi tên hàm) và là nỗi ác mộng của Database (nghẽn cổ chai I/O). Rõ ràng, qua sự tiến hóa này, chúng ta thấy **không có một "viên đạn bạc" (Silver Bullet) nào** giải quyết được mọi thứ!
 
-> 📌 **Chú thích thang điểm / ký hiệu đánh giá:**
-> - 🟢 **Màu Xanh / Dấu Tích (✅) / Tên Lửa (🚀):** Mức độ Rất tốt, Dễ dàng, Hiệu năng cao (Đề xuất sử dụng).
-> - 🟡 **Màu Vàng / Tia Sét (⚡):** Mức độ Khá, Trung bình, Chấp nhận được (Cần cân nhắc ngữ cảnh).
-> - 🔴 **Màu Đỏ / Dấu X (❌) / Ốc Sên (🐌):** Mức độ Kém, Rất khó, Hiệu năng thảm họa (Nên tránh).
-> - 🟣 **Màu Tím:** Đặc thù riêng biệt (Sức mạnh/Kiến trúc vượt trội nhưng đánh đổi bằng chi phí cao).
-> - ⚠️ **Cảnh báo:** Có rủi ro tiềm ẩn (Cổ chai, bảo mật) hoặc phải tự code logic phức tạp.
 
----
 
-### 1.3. Giải pháp thực tế: Kiến trúc Phân quyền Đa lớp (Zero Trust Pipeline)
+### 1.3. Lời giải hoàn hảo: Kiến trúc Phân quyền Đa lớp (Zero Trust Pipeline)
 
-*Từ bảng phân tích trên, lập luận cốt lõi của em là: **Không có mô hình đơn lẻ nào là hoàn hảo**. Do đó, kiến trúc em áp dụng là sự **KẾT HỢP** những điểm mạnh nhất của các mô hình trên, tạo thành **Đường ống Zero Trust 6 thành phần**:*
 
+
+*Từ bảng phân tích đa chiều ở trên, lập luận cốt lõi của em là: **Không có mô hình đơn lẻ nào là hoàn hảo**. Do đó, kiến trúc mà dự án áp dụng là sự **KẾT HỢP (Hybrid)** những điểm tinh túy nhất của tất cả các mô hình, tạo thành một **Đường ống Zero Trust 6 thành phần**:*
+
+**1. Sơ đồ Thực thể Đa lớp (ERD):**
+```mermaid
+erDiagram
+    USERS ||--o{ AUDIT_LOGS : "sinh ra vết"
+    USERS ||--o{ USER_ROLES : "cấp phát"
+    ROLES ||--o{ USER_ROLES : "được gán cho"
+    ROLES ||--o{ ROLE_PERMISSIONS : "bao gồm"
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : "định nghĩa"
+    AUDIT_LOGS {
+        string Action "articles:create"
+        string Status "ALLOW / DENY"
+        string Reason "Sai phòng ban"
+    }
+```
+**2. Sơ đồ Pipeline 6 thành phần:**
 ```mermaid
 flowchart LR
     Req[1. Request API] --> S[2. Scope]
@@ -246,51 +328,82 @@ flowchart LR
 
 **💻 Demo Code Kiến trúc Zero Trust (Pipeline 4 Lớp Thực thi):**
 ```csharp
-// 1. Cấu hình Pipeline Đa lớp tại Program.cs
+// [GIAI ĐOẠN 1]: Lắp ráp Đường ống 4 lớp tại Program.cs (Cấu hình 1 lần duy nhất lúc chạy App)
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("ZeroTrust_ArticleCreatePolicy", policy => 
     {
-        // Lớp 1 (Scope): Thiết bị/App phải có quyền ghi
+        // 🛡️ Lớp 1 (Scope): Quét thẻ từ vòng ngoài cùng. Thiết bị di động hay Web App này có được cấp quyền ghi (write) không?
         policy.RequireClaim("scope", "news.write");
         
-        // Lớp 2 (RBAC & PBAC): Role của User phải có Permission tạo bài
+        // 🛡️ Lớp 2 (PBAC): Quét thẻ nhân viên. User này có "Giấy phép" để tạo bài viết không? 
+        // Lớp này chặn đứng 90% lượng truy cập rác, giúp Database bên trong không bị quá tải.
         policy.RequireClaim("permission", "articles:create");
         
-        // Lớp 3 (ABAC): Logic động - Bắt buộc thuộc phòng ban Biên tập
+        // 🛡️ Lớp 3 (ABAC): Nhúng Handler logic động. Phải đúng là người của phòng ban "Editorial" mới được đi tiếp.
         policy.Requirements.Add(new DepartmentAbacRequirement("Editorial"));
     });
 });
 
-// 2. Lớp 3 (ABAC Handler) - Nơi xử lý nghiệp vụ bảo mật động
+// [GIAI ĐOẠN 2]: Code phần thân của Lớp 3 (Nơi xử lý nghiệp vụ bảo mật động)
 public class DepartmentAbacHandler : AuthorizationHandler<DepartmentAbacRequirement>
 {
     protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, DepartmentAbacRequirement req)
     {
         var userDept = context.User.FindFirst("department")?.Value;
         
-        // Lớp 4 (Author Engine & Audit): Đưa ra phán quyết và lưu vết
+        // Cỗ máy Author Engine đưa ra phán quyết
         if (userDept == req.RequiredDepartment) 
         {
             context.Succeed(req); // Vượt ải màng lọc thép!
         }
         else 
         {
-            // Middleware ngầm / Logic ghi Audit Log sẽ bắt lỗi tại đây
-            _logger.LogWarning($"[Audit] Chặn {context.User.Identity?.Name} do sai phòng ban.");
+            // 🛡️ Lớp 4 (Audit): Ghi sổ đen (Log) ngay lập tức nếu kẻ gian cố tình lách qua Lớp 1 và Lớp 2.
+            _logger.LogWarning($"[Audit] Đã chặn tài khoản {context.User.Identity?.Name} do sai phòng ban.");
         }
         return Task.CompletedTask;
     }
 }
 
-// 3. Controller - Developer chỉ tập trung 100% vào Business Logic
+// [GIAI ĐOẠN 3]: Tại Controller - Developer được giải phóng 100% khỏi gánh nặng bảo mật
+// Gắn cái "Phễu" Policy Đa lớp lên API. Bên trong hàm hoàn toàn SẠCH SẼ, không có lấy 1 lệnh if-else check quyền nào!
 [Authorize(Policy = "ZeroTrust_ArticleCreatePolicy")]
 [HttpPost]
 public IActionResult CreateArticle() 
 { 
-    return Ok("Dữ liệu đã đi qua 4 lớp màng lọc Zero Trust thành công!"); 
+    return Ok("Tuyệt vời! Dữ liệu đã an toàn vượt qua 4 lớp màng lọc Zero Trust."); 
 }
 ```
+
+> 🎯 **Key Takeaway (Chốt hạ bài toán):** Tại sao Zero Trust Pipeline lại là mảnh ghép hoàn hảo nhất cho hệ thống Quản lý Tin tức quy mô lớn?
+> - **Cân bằng Hiệu năng & Bảo mật:** Nó lấy tốc độ của JWT (mang theo Role/Permission của PBAC) để chặn đứng các request rác ngay từ vòng ngoài. Chỉ những request hợp pháp mới lọt vào vòng trong để xử lý logic dữ liệu phức tạp (ABAC), nhờ đó Database không bao giờ bị quá tải.
+> - **Linh hoạt tuyệt đối:** Quản trị viên thao tác phân quyền động bằng cách cấp Permission trên giao diện, trong khi Lập trình viên khóa chặt an toàn dữ liệu lõi bằng ABAC Handler. Mọi rủi ro lộ lọt dữ liệu đều bị triệt tiêu từ gốc!
+
+---
+
+#### 📊 Bảng so sánh tổng hợp đa chiều
+| Tiêu chí | RBAC (Role) | PBAC (Permission) | ABAC (Attribute) | ReBAC (Relationship) | Dynamic Filter (Controller) | Giải pháp Zero Trust |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **1. Bản chất hoạt động** | Gắn cứng Role vào mã nguồn | Cấp quyền dựa trên Hành động | Đánh giá điều kiện Thuộc tính | Duyệt Đồ thị quan hệ | Bắt theo tên Route (Controller/Action) | Phối hợp màng lọc Đa lớp |
+| **2. Độ chi tiết (Granularity)** | **Thô** (Chỉ gom nhóm là "Admin", không rõ được gọi API nào) | **Mịn** (Biết rõ được phép gọi API Create, nhưng cấm API Delete) | **Siêu mịn** (Cùng API Edit, nhưng chỉ được sửa "Bài của mình") | **Mịn** (Quyền lan truyền tự động theo thư mục cha-con) | **Mịn** (Bắt chính xác từng đường dẫn URL, từng nút bấm) | **Toàn diện** (Kiểm soát từ thiết bị, hành động, đến dữ liệu) |
+| **3. Khi thay đổi quyền hạn** | **Phải sửa Code & Rebuild** (Do Role bị hardcode) | **Đổi trên DB** (Có tác dụng ngay không cần Rebuild) | **Cấu hình Policy** (Linh hoạt theo logic code) | **Cấu hình trên SaaS** (Giao diện đồ thị ngoài) | **Tích chọn trên UI** (Lưu Database không cần Rebuild) | **Động 100%** (Đổi trên DB & Policy linh hoạt) |
+| **4. Độ linh hoạt (Xử lý ngoại lệ)** | **Rất Kém** (Bị bó cứng theo chức danh, khó cấp quyền dị biệt) | **Khá** (Có thể cấp quyền lẻ cho từng User ngoài nhóm) | **Tuyệt đối** (Dễ dàng code các luật kinh doanh kỳ lạ nhất) | **Cao** (Xử lý gọn bài toán chia sẻ ngang hàng/thừa kế) | **Khá** (Tùy biến cấp/tước quyền trên UI nhanh chóng) | **Tối đa** (Đáp ứng mọi rule từ tĩnh đến động) |
+| **5. Hiệu năng (Performance)** | 🚀 **Rất nhanh** (Chỉ check chuỗi Role trong Token) | 🚀 **Nhanh** (Quyền được cache vào JWT Token) | ⚠️ **Chậm** (Phải query DB lấy dữ liệu thực thể để so sánh) | ⚡ **Rất nhanh** (Engine bên thứ 3 có thuật toán cache riêng) | 🐌 **Rất chậm** (Mọi Request đều phải query xuống Database) | 🚀 **Nhanh** (Tối ưu nhờ Redis Cache & JWT Payload nhẹ) |
+| **6. Bền vững khi Refactor Code** | ✅ **Tốt** (Sửa tên hàm thoải mái vì gắn bằng Attribute) | ✅ **Rất Tốt** (Dùng chuỗi String cố định như `articles:read`) | ✅ **Tốt** (Logic gói gọn trong Handler độc lập) | ✅ **Tốt** (Tách biệt khỏi mã nguồn) | ❌ **Rất kém** (Đổi tên Controller/Action là gãy quyền toàn cục) | ✅ **Tốt** (Controller không chứa bất kỳ logic quyền nào) |
+| **7. Bối cảnh động & Dữ liệu** | ❌ **Không** (Mù lòa về chủ sở hữu dữ liệu) | ❌ **Không** (Chỉ biết hành động, dễ bị lỗi IDOR) | ✅ **Có** (Nhận diện chủ sở hữu, phòng ban, thời gian) | ✅ **Có** (Tính toán dựa trên quan hệ cha-con) | ❌ **Không** (Chỉ chặn cửa ngoài Controller, dễ dính IDOR) | ✅ **Có** (Bắt trọn nhờ lớp ABAC Handler ở cuối) |
+| **8. Kiểm soát Thiết bị (Scope)** | ❌ **Không** | ❌ **Không** | ⚠️ **Khó áp dụng** | ❌ **Không** | ❌ **Không** | ✅ **Có** (Chặn ngay ở lớp màng lọc số 1 từ Token) |
+| **9. Độ phức tạp Code / Setup** | 🟢 **Rất Dễ** (Chỉ thêm 1 dòng Attribute vào Code) | 🟡 **Trung bình** (Cần thiết lập Policy & Database) | 🔴 **Rất Khó** (Phải viết Handler và thiết kế DB tinh vi) | 🟣 **Đắt đỏ** (Phụ thuộc vào dịch vụ SaaS trả phí) | 🟡 **Khá Dễ** (Chỉ cần viết 1 Filter dùng chung) | 🔴 **Khó** (Cần Boilerplate lớn, nhưng vô cùng xứng đáng) |
+| **10. Khả năng Kiểm toán (Audit)** | 🟢 **Dễ** (Chỉ cần query bảng Role) | 🟢 **Dễ** (Query bảng Permission là thấy) | 🔴 **Rất Khó** (Quyền bị giấu kín trong logic if-else) | 🟢 **Dễ** (Truy vấn đồ thị Zanzibar) | 🟢 **Dễ** (Query bảng Menu Filter) | 🟣 **Toàn diện** (Lưu vết mọi hành động qua Audit Log) |
+| **11. Khả năng Mở rộng (Scale hệ thống)** | 🔴 **Kém** (Bùng nổ số lượng bảng gán quyền khi quy mô Cty tăng) | 🟡 **Khá** (Dễ phình to bảng cấu hình User-Permission) | 🟢 **Tốt** (1 rule code bao quát được hàng triệu User) | 🟣 **Hoàn hảo** (Thuật toán Google chuyên trị Big Data) | 🔴 **Thảm họa** (Nghẽn cổ chai DB I/O khi đông User) | 🟢 **Rất Tốt** (Pipeline xử lý nhẹ nhàng, ít phụ thuộc DB) |
+| **12. Tương thích Microservices** | 🟡 **Trung bình** (Truyền Role qua JWT) | 🟢 **Tốt** (Truyền Permission nhẹ nhàng qua JWT) | 🟡 **Khó** (Mỗi service phải tự query DB lấy thuộc tính) | 🟢 **Tốt** (Gọi quyền tập trung qua Engine SaaS) | 🔴 **Bất lực** (Mỗi service lại phải tự chọc chung 1 DB) | 🟣 **Tuyệt vời** (Phi tập trung hoàn hảo nhờ Token & Handler) |
+
+> 📌 **Chú thích thang điểm / ký hiệu đánh giá:**
+> - 🟢 **Màu Xanh / Dấu Tích (✅) / Tên Lửa (🚀):** Mức độ Rất tốt, Dễ dàng, Hiệu năng cao (Đề xuất sử dụng).
+> - 🟡 **Màu Vàng / Tia Sét (⚡):** Mức độ Khá, Trung bình, Chấp nhận được (Cần cân nhắc ngữ cảnh).
+> - 🔴 **Màu Đỏ / Dấu X (❌) / Ốc Sên (🐌):** Mức độ Kém, Rất khó, Hiệu năng thảm họa (Nên tránh).
+> - 🟣 **Màu Tím:** Đặc thù riêng biệt (Sức mạnh/Kiến trúc vượt trội nhưng đánh đổi bằng chi phí cao).
+> - ⚠️ **Cảnh báo:** Có rủi ro tiềm ẩn (Cổ chai, bảo mật) hoặc phải tự code logic phức tạp.
 
 ---
 
