@@ -49,8 +49,8 @@ public IActionResult CreateArticle() { ... }
 
 ---
 
-## 3. Dynamic Filter theo Controller/Action (Truyền thống/CMS)
-Đây là cách các hệ thống CMS cũ thường làm: Viết một Filter chặn mọi Request, lấy tên `ControllerName` và `ActionName`, rồi chọc xuống Database xem User này có được Admin tick chọn quyền hay không.
+## 3. Phương pháp Cài đặt: Dynamic Filter theo Controller/Action
+Đây là một phương pháp cấu hình phân quyền phổ biến: Viết một Filter (cửa khẩu) chặn mọi Request, lấy tên `ControllerName` và `ActionName`, rồi truy vấn xuống Database xem User này có được quản trị viên cấp quyền hay không.
 
 ### 💻 Demo Code
 ```csharp
@@ -80,14 +80,14 @@ public class PermissionAuthorizationFilter : IAsyncAuthorizationFilter
 
 ---
 
-## 4. Kiến Trúc Zero Trust 4 Lớp (Triết lý của chúng ta)
-Để giải quyết tất cả nhược điểm trên, kiến trúc của dự án DemoC# áp dụng tư duy Zero Trust (Không tin tưởng bất kỳ ai), thiết lập một "Đường ống" (Pipeline) gồm 4 màng lọc thép ngay tại tầng Infrastructure (Kết hợp cả Scope, PBAC và ABAC).
+## 4. Kiến Trúc Zero Trust (6 Thành phần - 4 Lớp Thực thi)
+Để giải quyết tất cả nhược điểm trên, hệ thống áp dụng tư duy Zero Trust với 6 thành phần logic (RBAC, PBAC, Scope, ABAC, Author Engine, Audit). Trong thực tế lập trình bằng ASP.NET Core, 6 thành phần này được nhúng thành một "Đường ống" (Pipeline) gồm 4 lớp thực thi liên tiếp:
 
 ### 💻 Demo Cấu Trúc Lớp (Pipeline)
-1. **Lớp 1 (Scope Check):** Client App (Postman/Mobile) phải có chuỗi `news.write`.
-2. **Lớp 2 (PBAC Check):** Bóc `Role` từ Token, đối chiếu xuống Database để xác nhận Role đó có chứa permission `articles:create` hay không.
-3. **Lớp 3 (ABAC Check):** So khớp động: Department của User phải giống với phòng ban được phép cấu hình.
-4. **Lớp 4 (Audit Log):** Dù đi tiếp hay bị chặn, một Middleware ngầm luôn lưu vết (Log) xuống Database để làm bằng chứng.
+1. **Lớp 1 (Scope Check):** Client App (Postman/Mobile) phải có chuỗi `news.write` (Giới hạn thiết bị).
+2. **Lớp 2 (RBAC & PBAC Check):** Bóc `Role` (Thành phần RBAC) từ Token, đối chiếu xuống Database để xác nhận Role đó có được cấp phép Hành động (Thành phần PBAC - ví dụ `articles:create`) hay không.
+3. **Lớp 3 (ABAC Check):** So khớp động các thuộc tính dữ liệu: Ví dụ Department của User phải giống với phòng ban được phép cấu hình.
+4. **Lớp 4 (Author Engine & Audit Log):** Động cơ `Authorization Middleware` (Author Engine) của .NET sẽ đánh giá kết quả 3 lớp trên để ra phán quyết ALLOW/DENY. Dù đi tiếp hay bị chặn, một thành phần ngầm (Audit Log) luôn lưu vết xuống Database để làm bằng chứng.
 
 ### 💻 Demo Code
 ```csharp
@@ -129,4 +129,4 @@ protected override Task HandleRequirementAsync(AuthorizationHandlerContext conte
 | **Kiểm soát App (Scope)** | Không | Không | Không | CÓ |
 | **Độ phức tạp code** | Thấp | Trung Bình | Trung Bình | Cao (Đáng giá từng đồng) |
 
-**Tóm lại:** Nếu bạn làm bài tập lớn, RBAC là đủ. Nếu làm CMS admin cổ điển, Controller Filter là một sự lựa chọn chấp nhận được. Nhưng để hệ thống đạt chuẩn Enterprise, bảo mật cho ngân hàng hoặc viễn thông, **Zero Trust 4 Lớp** là con đường chân lý duy nhất!
+**Tóm lại:** Nếu bài toán đơn giản, RBAC là đủ. Nếu cần một màn hình cấu hình cấp quyền linh hoạt từng nút bấm, Controller Filter là một lựa chọn phù hợp. Tuy nhiên, để hệ thống đạt chuẩn Enterprise, bảo mật cho các nghiệp vụ phức tạp liên quan đến sở hữu dữ liệu, **Zero Trust Đa Lớp** là con đường chân lý duy nhất!
